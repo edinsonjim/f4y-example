@@ -1,1 +1,8 @@
 /target
+
+# Local SQLite database created at runtime
+*.db
+*.db-journal
+
+# Playwright MCP scratch output
+/.playwright-mcp
