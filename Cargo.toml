@@ -13,6 +13,7 @@ topcoat = { version = "0.9.0", features = [
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
 toasty = { version = "0.11.0", features = ["sqlite", "jiff", "migration"] }
 jiff = "0.2.37"
+serde = { version = "1.0.229", features = ["derive"] }
 
 [build-dependencies]
 topcoat = { version = "0.9.0", default-features = false, features = [
