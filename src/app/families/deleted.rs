@@ -85,22 +85,29 @@ async fn deleted_rows(families: toasty::stmt::Page<Family>) -> Result<impl View>
                 )
                 table_body(
                     for family in families.items {
-                        table_row(
-                            table_cell((family.id))
-                            table_cell((family.name))
-                            table_cell(
-                                if let Some(summary) = family.summary {
-                                    (summary)
-                                } else {
-                                    <span class="text-muted-foreground">"—"</span>
-                                }
-                            )
-                            table_cell((family.deleted_at.map(|value| value.to_string()).unwrap_or_default()))
-                            table_cell(restore_action(family_id: family.id, version: family.version))
-                        )
+                        deleted_family_row(family: family)
                     }
                 )
             )
         }
+    })
+}
+
+#[component]
+async fn deleted_family_row(family: Family) -> Result<impl View> {
+    Ok(view! {
+        table_row(
+            table_cell((family.id))
+            table_cell((family.name))
+            table_cell(
+                if let Some(summary) = family.summary {
+                    (summary)
+                } else {
+                    <span class="text-muted-foreground">"—"</span>
+                }
+            )
+            table_cell((family.deleted_at.map(|value| value.to_string()).unwrap_or_default()))
+            table_cell(restore_action(family_id: family.id, version: family.version))
+        )
     })
 }
