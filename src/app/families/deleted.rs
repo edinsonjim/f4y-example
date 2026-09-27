@@ -1,3 +1,5 @@
+use super::navigation::FamilyPageNavigation;
+use super::row_actions::restore_action;
 use crate::{
     components::{
         button::{ButtonSize, ButtonVariant, button_variants},
@@ -14,30 +16,21 @@ use topcoat::{
     view::{View, component, view},
 };
 
-mod actions;
-mod deleted;
-mod form;
-mod navigation;
-mod row_actions;
-
-use navigation::FamilyPageNavigation;
-use row_actions::row_actions as family_row_actions;
-
 #[query_params(error = bad_request)]
-struct FamiliesQuery {
+struct DeletedFamiliesQuery {
     after: Option<i64>,
     before: Option<i64>,
+    conflict: Option<bool>,
 }
 
-#[page("/families")]
+#[page("/families/deleted")]
 async fn index(cx: &Cx) -> Result<impl View> {
-    // Toasty queries need `&mut Db`; clones share the router's connection pool.
-    let mut handle = app_context::<toasty::Db>(cx).clone();
-    let query = query_params::<FamiliesQuery>(cx)?;
+    let mut db = app_context::<toasty::Db>(cx).clone();
+    let query = query_params::<DeletedFamiliesQuery>(cx)?;
     let families = match (query.after, query.before) {
-        (Some(cursor_id), _) => Family::active_page_after(&mut handle, cursor_id).await?,
-        (None, Some(cursor_id)) => Family::active_page_before(&mut handle, cursor_id).await?,
-        (None, None) => Family::first_active_page(&mut handle).await?,
+        (Some(cursor_id), _) => Family::deleted_page_after(&mut db, cursor_id).await?,
+        (None, Some(cursor_id)) => Family::deleted_page_before(&mut db, cursor_id).await?,
+        (None, None) => Family::first_deleted_page(&mut db).await?,
     };
     let previous_url = families.previous_url();
     let next_url = families.next_url();
@@ -46,27 +39,22 @@ async fn index(cx: &Cx) -> Result<impl View> {
         <main class="mx-auto flex max-w-5xl flex-col gap-6 p-8">
             card(
                 card_header(
-                    card_title("Families")
-                    card_description("CRUD built with Topcoat 0.9, Toasty and SQLite.")
+                    card_title("Deleted families")
+                    card_description("Restore a family to make it active again.")
                 )
                 card_content(
-                    <div class="mb-5 flex flex-wrap gap-3">
-                        <a
-                            href="/families/new"
-                            class=(button_variants(ButtonVariant::Primary, ButtonSize::Md))
-                        >
-                            "Create family"
-                        </a>
-                        <a
-                            href="/families/deleted"
-                            class=(button_variants(ButtonVariant::Outline, ButtonSize::Md))
-                        >
-                            "Deleted families"
-                        </a>
-                    </div>
-                    rows(
-                        families: families,
-                    )
+                    <a
+                        href="/families"
+                        class=(button_variants(ButtonVariant::Outline, ButtonSize::Md))
+                    >
+                        "Back to families"
+                    </a>
+                    if query.conflict.unwrap_or(false) {
+                        <div role="alert" class="my-4 rounded-lg border border-destructive p-3 text-sm text-destructive">
+                            "This family changed before it could be restored. Review the latest deleted families and try again."
+                        </div>
+                    }
+                    deleted_rows(families: families)
                     cursor_pagination(
                         previous_url: previous_url,
                         next_url: next_url,
@@ -78,11 +66,11 @@ async fn index(cx: &Cx) -> Result<impl View> {
 }
 
 #[component]
-async fn rows(families: toasty::stmt::Page<Family>) -> Result<impl View> {
+async fn deleted_rows(families: toasty::stmt::Page<Family>) -> Result<impl View> {
     Ok(view! {
         if families.is_empty() {
             <p class="py-6 text-center text-sm text-muted-foreground">
-                "No families yet."
+                "No deleted families."
             </p>
         } else {
             table(
@@ -91,7 +79,7 @@ async fn rows(families: toasty::stmt::Page<Family>) -> Result<impl View> {
                         table_head("ID")
                         table_head("Name")
                         table_head("Summary")
-                        table_head("Version")
+                        table_head("Deleted at")
                         table_head("Actions")
                     )
                 )
@@ -100,17 +88,15 @@ async fn rows(families: toasty::stmt::Page<Family>) -> Result<impl View> {
                         table_row(
                             table_cell((family.id))
                             table_cell((family.name))
-                            // An absent summary is marked rather than left
-                            // blank, so it does not read as a rendering bug.
                             table_cell(
-                                if let Some(text) = family.summary {
-                                    (text)
+                                if let Some(summary) = family.summary {
+                                    (summary)
                                 } else {
                                     <span class="text-muted-foreground">"—"</span>
                                 }
                             )
-                            table_cell((family.version))
-                            table_cell(family_row_actions(family_id: family.id, version: family.version))
+                            table_cell((family.deleted_at.map(|value| value.to_string()).unwrap_or_default()))
+                            table_cell(restore_action(family_id: family.id, version: family.version))
                         )
                     }
                 )

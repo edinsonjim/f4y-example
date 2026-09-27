@@ -954,6 +954,7 @@ name = "f4y-example"
 version = "0.1.0"
 dependencies = [
  "jiff",
+ "serde",
  "toasty",
  "tokio",
  "topcoat",

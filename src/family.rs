@@ -150,6 +150,43 @@ impl Family {
             .exec(db)
             .await
     }
+
+    /// Fetch the first page of soft-deleted families, newest first.
+    pub async fn first_deleted_page(
+        db: &mut toasty::Db,
+    ) -> toasty::Result<toasty::stmt::Page<Self>> {
+        Self::filter(Self::fields().deleted_at().is_some())
+            .order_by(Self::fields().id().desc())
+            .paginate(ACTIVE_PAGE_SIZE)
+            .exec(db)
+            .await
+    }
+
+    /// Fetch the next deleted page after the family with `cursor_id`.
+    pub async fn deleted_page_after(
+        db: &mut toasty::Db,
+        cursor_id: i64,
+    ) -> toasty::Result<toasty::stmt::Page<Self>> {
+        Self::filter(Self::fields().deleted_at().is_some())
+            .order_by(Self::fields().id().desc())
+            .paginate(ACTIVE_PAGE_SIZE)
+            .after(cursor_id)
+            .exec(db)
+            .await
+    }
+
+    /// Fetch the previous deleted page before the family with `cursor_id`.
+    pub async fn deleted_page_before(
+        db: &mut toasty::Db,
+        cursor_id: i64,
+    ) -> toasty::Result<toasty::stmt::Page<Self>> {
+        Self::filter(Self::fields().deleted_at().is_some())
+            .order_by(Self::fields().id().desc())
+            .paginate(ACTIVE_PAGE_SIZE)
+            .before(cursor_id)
+            .exec(db)
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -342,6 +379,49 @@ mod tests {
                 .expect("list failed")
                 .len(),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn deleted_pages_are_bounded_and_exclude_active_families() {
+        let mut db = memory_db().await;
+        let active = Family::create_record(&mut db, "Active", None)
+            .await
+            .expect("create failed");
+
+        for index in 0..=ACTIVE_PAGE_SIZE {
+            let mut family = Family::create_record(&mut db, format!("Deleted {index}"), None)
+                .await
+                .expect("create failed");
+            family
+                .soft_delete(&mut db)
+                .await
+                .expect("soft delete failed");
+        }
+
+        let first = Family::first_deleted_page(&mut db)
+            .await
+            .expect("first deleted page failed");
+
+        assert_eq!(first.len(), ACTIVE_PAGE_SIZE);
+        assert!(first.has_next());
+        assert!(!first.has_prev());
+        assert!(first.iter().all(|family| family.deleted_at.is_some()));
+
+        let boundary = first.last().expect("first page should have rows").id;
+        let second = Family::deleted_page_after(&mut db, boundary)
+            .await
+            .expect("next deleted page failed");
+
+        assert_eq!(second.len(), 1);
+        assert!(!second.has_next());
+        assert!(second.has_prev());
+        assert_eq!(
+            Family::find_active(&mut db, active.id)
+                .await
+                .expect("active lookup failed")
+                .map(|family| family.id),
+            Some(active.id)
         );
     }
 }
