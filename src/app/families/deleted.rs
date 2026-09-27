@@ -16,6 +16,8 @@ use topcoat::{
     view::{View, component, view},
 };
 
+const DELETED_AT_TIME_ZONE: &str = "Europe/Rome";
+
 #[query_params(error = bad_request)]
 struct DeletedFamiliesQuery {
     after: Option<i64>,
@@ -79,7 +81,7 @@ async fn deleted_rows(families: toasty::stmt::Page<Family>) -> Result<impl View>
                         table_head("ID")
                         table_head("Name")
                         table_head("Summary")
-                        table_head("Deleted at")
+                        table_head("Deleted at (Europe/Rome)")
                         table_head("Actions")
                     )
                 )
@@ -95,6 +97,16 @@ async fn deleted_rows(families: toasty::stmt::Page<Family>) -> Result<impl View>
 
 #[component]
 async fn deleted_family_row(family: Family) -> Result<impl View> {
+    let deleted_at = if let Some(timestamp) = family.deleted_at {
+        let local_time = timestamp.in_tz(DELETED_AT_TIME_ZONE)?;
+        Some((
+            timestamp.to_string(),
+            local_time.strftime("%b %d, %Y, %-I:%M %p").to_string(),
+        ))
+    } else {
+        None
+    };
+
     Ok(view! {
         table_row(
             table_cell((family.id))
@@ -106,8 +118,34 @@ async fn deleted_family_row(family: Family) -> Result<impl View> {
                     <span class="text-muted-foreground">"—"</span>
                 }
             )
-            table_cell((family.deleted_at.map(|value| value.to_string()).unwrap_or_default()))
+            table_cell(
+                if let Some((datetime, label)) = deleted_at {
+                    <time datetime=(datetime)>(label)</time>
+                } else {
+                    <span class="text-muted-foreground">"—"</span>
+                }
+            )
             table_cell(restore_action(family_id: family.id, version: family.version))
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deleted_at_is_formatted_in_rome_time() {
+        let timestamp: jiff::Timestamp = "2026-09-27T14:21:59.349526Z"
+            .parse()
+            .expect("valid timestamp");
+        let local_time = timestamp
+            .in_tz(DELETED_AT_TIME_ZONE)
+            .expect("time zone should be available");
+
+        assert_eq!(
+            local_time.strftime("%b %d, %Y, %-I:%M %p").to_string(),
+            "Sep 27, 2026, 4:21 PM"
+        );
+    }
 }

@@ -29,6 +29,7 @@ Use `topcoat dev` to build and serve the frontend assets. Running the binary dir
 - Soft-delete families and restore them from the deleted-families page.
 - Use optimistic locking to detect stale edits and prevent overwriting newer changes.
 - Browse active and deleted families with cursor-based pagination.
+- Display deletion timestamps in the `Europe/Rome` time zone; timestamps remain stored as UTC instants.
 - Changes appear after navigation or a manual page refresh; the list does not push live updates to other open pages.
 
 ## Pages
