@@ -2,6 +2,7 @@
 name = "f4y-example"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 topcoat = { version = "0.9.0", features = [
