@@ -45,6 +45,71 @@ pub struct Family {
 }
 
 impl Family {
+    /// Create a family. Toasty initializes its version and timestamps.
+    pub async fn create_record(
+        db: &mut toasty::Db,
+        name: impl Into<String>,
+        summary: Option<String>,
+    ) -> toasty::Result<Self> {
+        toasty::create!(Family {
+            name: name.into(),
+            summary,
+        })
+        .exec(db)
+        .await
+    }
+
+    /// Find a family by ID unless it has been soft-deleted.
+    pub async fn find_active(db: &mut toasty::Db, id: i64) -> toasty::Result<Option<Self>> {
+        Self::filter_by_id(id)
+            .filter(Self::fields().deleted_at().is_none())
+            .first()
+            .exec(db)
+            .await
+    }
+
+    /// Find a soft-deleted family by ID so it can be restored.
+    pub async fn find_deleted(db: &mut toasty::Db, id: i64) -> toasty::Result<Option<Self>> {
+        Self::filter_by_id(id)
+            .filter(Self::fields().deleted_at().is_some())
+            .first()
+            .exec(db)
+            .await
+    }
+
+    /// Update editable fields, incrementing the optimistic-lock version.
+    pub async fn update_details(
+        &mut self,
+        db: &mut toasty::Db,
+        name: impl Into<String>,
+        summary: Option<String>,
+    ) -> toasty::Result<()> {
+        self.update()
+            .name(name.into())
+            .summary(summary)
+            .exec(db)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Soft-delete the family while preserving the row for restoration.
+    pub async fn soft_delete(&mut self, db: &mut toasty::Db) -> toasty::Result<()> {
+        self.update()
+            .deleted_at(Some(Timestamp::now()))
+            .exec(db)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Restore a soft-deleted family.
+    pub async fn restore(&mut self, db: &mut toasty::Db) -> toasty::Result<()> {
+        self.update().deleted_at(None).exec(db).await?;
+
+        Ok(())
+    }
+
     /// Fetch the first page of active families, newest first.
     ///
     /// Families are ordered by their auto-incrementing ID, which gives the
@@ -108,11 +173,11 @@ mod tests {
     async fn create_starts_at_version_one() {
         let mut db = memory_db().await;
 
-        let family = toasty::create!(Family {
-            name: "The Simpsons",
-            summary: Some(String::from("The Springfield family")),
-        })
-        .exec(&mut db)
+        let family = Family::create_record(
+            &mut db,
+            "The Simpsons",
+            Some(String::from("The Springfield family")),
+        )
         .await
         .expect("create failed");
 
@@ -124,8 +189,7 @@ mod tests {
     async fn summary_is_optional() {
         let mut db = memory_db().await;
 
-        let created = toasty::create!(Family { name: "The Bikers" })
-            .exec(&mut db)
+        let created = Family::create_record(&mut db, "The Bikers", None)
             .await
             .expect("create failed");
 
@@ -142,8 +206,7 @@ mod tests {
     async fn stale_update_is_rejected() {
         let mut db = memory_db().await;
 
-        let mut family = toasty::create!(Family { name: "Original" })
-            .exec(&mut db)
+        let mut family = Family::create_record(&mut db, "Original", None)
             .await
             .expect("create failed");
         let mut stale = Family::get_by_id(&mut db, &family.id)
@@ -151,18 +214,14 @@ mod tests {
             .expect("load failed");
 
         family
-            .update()
-            .name("Updated by someone else")
-            .exec(&mut db)
+            .update_details(&mut db, "Updated by someone else", None)
             .await
             .expect("first update failed");
 
         assert_eq!(family.version, 2);
 
         let result = stale
-            .update()
-            .name("Should not be applied")
-            .exec(&mut db)
+            .update_details(&mut db, "Should not be applied", None)
             .await;
 
         assert!(result.is_err(), "a stale write must be rejected");
@@ -179,12 +238,9 @@ mod tests {
         let mut db = memory_db().await;
 
         for index in 0..(ACTIVE_PAGE_SIZE + 1) {
-            toasty::create!(Family {
-                name: format!("Family {index}"),
-            })
-            .exec(&mut db)
-            .await
-            .expect("create failed");
+            Family::create_record(&mut db, format!("Family {index}"), None)
+                .await
+                .expect("create failed");
         }
 
         let first = Family::first_active_page(&mut db)
@@ -221,22 +277,16 @@ mod tests {
         let mut db = memory_db().await;
 
         for index in 0..ACTIVE_PAGE_SIZE {
-            toasty::create!(Family {
-                name: format!("Family {index}"),
-            })
-            .exec(&mut db)
-            .await
-            .expect("create failed");
+            Family::create_record(&mut db, format!("Family {index}"), None)
+                .await
+                .expect("create failed");
         }
 
-        let mut removed = toasty::create!(Family { name: "Removed" })
-            .exec(&mut db)
+        let mut removed = Family::create_record(&mut db, "Removed", None)
             .await
             .expect("create failed");
         removed
-            .update()
-            .deleted_at(Some(Timestamp::now()))
-            .exec(&mut db)
+            .soft_delete(&mut db)
             .await
             .expect("soft delete failed");
 
@@ -249,5 +299,49 @@ mod tests {
 
         let total = Family::all().exec(&mut db).await.expect("count failed");
         assert_eq!(total.len(), ACTIVE_PAGE_SIZE + 1);
+    }
+
+    #[tokio::test]
+    async fn soft_deleted_family_can_be_restored() {
+        let mut db = memory_db().await;
+        let mut family = Family::create_record(&mut db, "The Bikers", None)
+            .await
+            .expect("create failed");
+
+        family
+            .soft_delete(&mut db)
+            .await
+            .expect("soft delete failed");
+        assert_eq!(family.version, 2);
+        assert!(family.deleted_at.is_some());
+        assert!(
+            Family::find_active(&mut db, family.id)
+                .await
+                .expect("active lookup failed")
+                .is_none()
+        );
+
+        let mut deleted = Family::find_deleted(&mut db, family.id)
+            .await
+            .expect("deleted lookup failed")
+            .expect("soft-deleted family should still exist");
+        deleted.restore(&mut db).await.expect("restore failed");
+
+        assert_eq!(deleted.version, 3);
+        assert!(deleted.deleted_at.is_none());
+        assert!(
+            Family::find_active(&mut db, family.id)
+                .await
+                .expect("active lookup failed")
+                .is_some()
+        );
+        assert_eq!(
+            Family::all()
+                .exec(&mut db)
+                .await
+                .expect("list failed")
+                .len(),
+            1
+        );
     }
 }
